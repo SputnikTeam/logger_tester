@@ -39,7 +39,7 @@ run(ConfigPath) ->
     io:format("all done, write report to: ~s~n", [Config#config.report_path]),
 
     ok = write_report(Report, StartTimer, Config),
-    CowSay = os:cmd("cowsay 'Goodbye'"),
+    CowSay = os:cmd("sh -c \"cowsay 'Goodbye' 2>/dev/null || echo Goodbye\""),
     io:format("~s~n", [CowSay]),
     ok.
 
