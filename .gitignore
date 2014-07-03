@@ -4,3 +4,16 @@ erl_crash.dump
 log/
 *.log
 .rebar/
+.eunit
+deps
+*.o
+*.beam
+*.plt
+*~
+#*
+*#
+erl_crash.dump
+ebin
+logapp
+.#*
+logtest.report
