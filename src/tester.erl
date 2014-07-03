@@ -15,7 +15,11 @@
           log_path
         }).
 
+async_run(ConfigPath) ->
+    proc_lib:spawn_link(fun() -> run(ConfigPath) end).
+
 run(ConfigPath) ->
+    StartSnapshot = system_health_snapshot(),
     io:format("read config ... "),
     Config = read_config(ConfigPath),
     io:format("ok~n"),
@@ -38,7 +42,7 @@ run(ConfigPath) ->
     Report = yield(Workers, Config),
     io:format("all done, write report to: ~s~n", [Config#config.report_path]),
 
-    ok = write_report(Report, StartTimer, Config),
+    ok = write_report(Report, StartTimer, StartSnapshot, Config),
     CowSay = os:cmd("sh -c \"cowsay 'Goodbye' 2>/dev/null || echo Goodbye\""),
     io:format("~s~n", [CowSay]),
     ok.
@@ -80,6 +84,7 @@ yield(Workers, _Config) ->
                               io:format("Worker #~w down, reason: ~p~n", [AccIn, Reason]),
                               {{Worker, {exit, Reason}}, AccIn + 1};
                           {Worker, {done, Results}} ->
+                              receive_one_mon(MonRef),
                               io:format("Worker #~w done~n", [AccIn]),
                               {{Worker, {done, Results}}, AccIn + 1}
                       end
@@ -87,7 +92,15 @@ yield(Workers, _Config) ->
               1,
               Workers)).
 
-write_report(Report, Timer, Config) ->
+receive_one_mon(MonRef) ->
+    receive
+        {'DOWN', MonRef, process, _, _} ->
+            ookay
+    after 100 ->
+            ok
+    end.
+
+write_report(Report, Timer, StartSnapshot, Config) ->
     AllTime = Timer(),
     MessagesWrited = Config#config.test_procs_count * Config#config.loops_count,
     MPS = MessagesWrited / (AllTime / 1000000),
@@ -99,13 +112,17 @@ write_report(Report, Timer, Config) ->
         "Run time: ~.2f sec~n"
         "Messaged writed: ~w~n"
         "MPS: ~.2f~n~n"
-        "=== Report ===~n~p~n",
+        "=== Report ===~n~p~n"
+        "=== System info on start ===~n~p~n"
+        "=== System info on end ===~n~p~n",
         [
          format_config(Config),
          AllTime / 1000000,
          MessagesWrited,
          MPS,
-         Report
+         Report,
+         StartSnapshot,
+         system_health_snapshot()
         ])).
 
 timer() ->
@@ -174,3 +191,88 @@ exact_value(Key, Proplist) ->
             Value
     end.
 
+system_health_snapshot() ->
+    Memory = erlang:memory(),
+
+    PCInfo = processes_info(
+               [
+                {message_queue_len, 10},
+                {total_heap_size, 1024 * 1024}
+               ]),
+    [
+     {memory, Memory},
+     {proc_info, PCInfo}
+    ].
+
+processes_info(Filters) ->
+    lists:foldl(
+      fun(Proc, AccIn) ->
+              case erlang:process_info(Proc) of
+                  undefined ->
+                      AccIn;
+                  ProcInfo ->
+                      filter_proc_info({Proc, ProcInfo}, Filters, AccIn)
+              end
+      end,
+      [],
+      erlang:processes()).
+
+filter_proc_info({Proc, Info}, Filters, AccIn) ->
+    case lists:any(
+           fun({K, V}) ->
+                   case proplists:get_value(K, Info) of
+                       undefined ->
+                           false;
+                       Value when Value > V ->
+                           true;
+                       _ ->
+                           false
+                   end
+           end, Filters) of
+        true ->
+            [{Proc, Info} | AccIn];
+        _ ->
+            AccIn
+    end.
+
+write_not_empty_queues(LogDir) ->
+    lists:foreach(
+      fun(Proc) ->
+              case erlang:process_info(Proc) of
+                  undefined ->
+                      ok;
+                  ProcInfo ->
+                      case proplists:get_value(message_queue_len, ProcInfo) of
+                          0 ->
+                              ok;
+                          _ ->
+                              Name = smart_pid_name(Proc),
+                              FilenameBin = filename:join(LogDir, Name ++ ".bin"),
+                              FilenameTxt = filename:join(LogDir, Name ++ ".txt"),
+                              ok = file:write_file(FilenameBin, term_to_binary({Proc, ProcInfo})),
+                              ok = file:write_file(FilenameTxt, io_lib:format("~p~n", [{Proc, ProcInfo}]))
+                      end
+              end
+      end,
+      erlang:processes()).
+
+smart_pid_name(Proc) ->
+    case erlang:process_info(Proc, registered_name) of
+        {registered_name, Name} ->
+            erlang:atom_to_list(Name);
+        _ ->
+            erlang:pid_to_list(Proc)
+    end.
+
+lager_info_loop(SleepTime) ->
+    timer:apply_interval(SleepTime, ?MODULE, lager_info, []).
+
+lager_info() ->
+    X = (catch element(2, erlang:process_info(whereis(lager_event), message_queue_len))),
+    case X of
+        0 ->
+            ok;
+        _ ->
+            io:format("lager_event messages count: ~w~n", [X])
+    end.
+             

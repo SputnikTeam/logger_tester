@@ -17,3 +17,7 @@ ebin
 logapp
 .#*
 logtest.report
+lager_next.log*
+logs
+1.config
+
