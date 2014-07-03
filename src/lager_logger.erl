@@ -1,4 +1,4 @@
--module (lager_next).
+-module (lager_logger).
 
 -export ([
     start/0,
