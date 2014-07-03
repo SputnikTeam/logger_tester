@@ -264,15 +264,23 @@ smart_pid_name(Proc) ->
             erlang:pid_to_list(Proc)
     end.
 
+disk_log_loop(Name, SleepTime) ->
+    timer:apply_interval(SleepTime, ?MODULE, disk_log_info, [Name]).
+
+disk_log_info(Name) ->
+    X = (catch element(2, erlang:process_info(disk_log_server:get_local_pid(Name)))),
+    print_if(X).
+
 lager_info_loop(SleepTime) ->
     timer:apply_interval(SleepTime, ?MODULE, lager_info, []).
 
 lager_info() ->
     X = (catch element(2, erlang:process_info(whereis(lager_event), message_queue_len))),
-    case X of
-        0 ->
-            ok;
-        _ ->
-            io:format("lager_event messages count: ~w~n", [X])
-    end.
+    print_if(X).
+
+print_if(X) when is_integer(X) andalso X > 0 ->
+    io:format("messages queue count: ~w~n", [X]);
+print_if(_) ->
+    ok.
+
              
